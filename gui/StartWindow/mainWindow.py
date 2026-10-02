@@ -11,9 +11,10 @@ import sys
 if __package__ in (None, ""):          # started as a script, e.g. from PyCharm
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+import gui  # sets sys.path and checks/repairs dependencies -- keep before PyQt5
+
 from PyQt5 import QtCore, QtGui, QtWidgets
 
-import gui
 from gui import theme
 
 

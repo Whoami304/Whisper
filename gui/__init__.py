@@ -15,3 +15,9 @@ ENGINE_DIR = os.path.join(PROJECT_ROOT, "Whisper")
 for _path in (PROJECT_ROOT, ENGINE_DIR):
     if _path not in sys.path:
         sys.path.insert(0, _path)
+
+# Check (and if needed repair) the installed packages before anything
+# imports Qt -- see gui/_deps.py.
+from gui import _deps  # noqa: E402
+
+_deps.ensure()
