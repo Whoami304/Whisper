@@ -1,78 +1,142 @@
-"""The start window: choose an operation.
+"""Whisper's main window: a home screen plus the Hide and Read pages.
 
-Rewritten alongside the other two. The generated version painted a script
-logo and two rounded cards with a custom hover animation, none of which
-matched what the app does, and it carried a real bug: the Hide handler
-closed a module-level global named MainWindow, which only exists when
-this file is run directly. Imported any other way, clicking Hide raised
-NameError after opening the window.
-
-This window is the app's front door, so it states the two operations
-plainly and in the same visual language as the windows they lead to.
+Everything lives in one window with a QStackedWidget, so moving between
+screens doesn't close and reopen windows (which made the window jump
+around and lose its size).
 """
 
 import sys
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 
-import gui  # sets sys.path for both the GUI and the engine
-
+import gui
 from gui import theme
 
 
-class OperationButton(QtWidgets.QPushButton):
-    """One of the two choices: a glyph, a name and a line of explanation.
+class ChoiceCard(QtWidgets.QPushButton):
+    """A large clickable card on the home screen."""
 
-    A QPushButton subclass rather than a composed widget so it keeps the
-    real button's keyboard handling, focus ring and accessible role for
-    free -- the previous version was a QWidget with a mousePressEvent,
-    which the keyboard could not reach at all.
-    """
-
-    def __init__(self, glyph, title, description, parent=None):
-        super(OperationButton, self).__init__(parent)
-        self.glyph = glyph
-        self.title = title
-        self.description = description
-        self.setObjectName("launch")
+    def __init__(self, icon_name, title, description, cta, parent=None):
+        super(ChoiceCard, self).__init__(parent)
+        self.setObjectName("choice")
         self.setCursor(QtCore.Qt.PointingHandCursor)
-        self.setMinimumHeight(96)
+        self.setMinimumHeight(200)
         self.setSizePolicy(QtWidgets.QSizePolicy.Expanding,
                            QtWidgets.QSizePolicy.Fixed)
-        # The text is painted below, but the accessible name has to come
-        # from somewhere a screen reader can read.
         self.setAccessibleName("%s. %s" % (title, description))
 
-    def paintEvent(self, event):
-        super(OperationButton, self).paintEvent(event)
-        painter = QtGui.QPainter(self)
-        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(24, 24, 24, 22)
+        lay.setSpacing(8)
 
-        lit = self.underMouse() or self.hasFocus()
-        left = 26
+        bubble = QtWidgets.QLabel()
+        bubble.setFixedSize(48, 48)
+        bubble.setAlignment(QtCore.Qt.AlignCenter)
+        bubble.setStyleSheet("background: %s; border-radius: 12px;" % theme.ACCENT_SOFT)
+        bubble.setPixmap(theme.icon_pixmap(icon_name, 24, theme.ACCENT))
+        lay.addWidget(bubble)
+        lay.addSpacing(8)
 
-        painter.setFont(theme.mono(22, QtGui.QFont.Bold))
-        painter.setPen(QtGui.QColor(theme.SIGNAL))
-        painter.drawText(left, int(self.height() / 2) + 8, self.glyph)
-        glyph_width = painter.fontMetrics().width(self.glyph)
+        t = theme.label(title, "stepTitle")
+        t.setStyleSheet("font-size: 18px;")
+        lay.addWidget(t)
+        d = theme.label(description, "hint", wrap=True)
+        lay.addWidget(d)
+        lay.addStretch()
 
-        text_x = left + glyph_width + 22
-        font = QtGui.QFont("Segoe UI", 12)
-        font.setWeight(QtGui.QFont.DemiBold)
-        painter.setFont(font)
-        painter.setPen(QtGui.QColor("#ffffff" if lit else theme.TEXT))
-        painter.drawText(text_x, int(self.height() / 2) - 4, self.title)
+        cta_row = QtWidgets.QHBoxLayout()
+        cta_row.setSpacing(6)
+        c = QtWidgets.QLabel(cta)
+        c.setStyleSheet("color: %s; font-weight: 600;" % theme.ACCENT)
+        cta_row.addWidget(c)
+        cta_row.addWidget(theme.icon_label("arrow", 16, theme.ACCENT))
+        cta_row.addStretch()
+        lay.addLayout(cta_row)
 
-        painter.setFont(theme.mono(11))
-        painter.setPen(QtGui.QColor(theme.TEXT_DIM))
-        painter.drawText(text_x, int(self.height() / 2) + 18, self.description)
+        for child in self.findChildren(QtWidgets.QLabel):
+            child.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
 
-        # A short accent rail on the left edge marks the hovered choice
-        # with something other than colour alone.
-        if lit:
-            painter.setPen(QtCore.Qt.NoPen)
-            painter.setBrush(QtGui.QColor(theme.SIGNAL))
-            painter.drawRect(0, 0, 3, self.height())
+
+class HomePage(QtWidgets.QWidget):
+
+    hideRequested = QtCore.pyqtSignal()
+    revealRequested = QtCore.pyqtSignal()
+
+    def __init__(self, parent=None):
+        super(HomePage, self).__init__(parent)
+        self.setObjectName("page")
+        outer = QtWidgets.QHBoxLayout(self)
+        outer.setContentsMargins(32, 32, 32, 28)
+        outer.addStretch(1)
+        column_w = QtWidgets.QWidget()
+        column_w.setMaximumWidth(760)
+        outer.addWidget(column_w, 100)
+        outer.addStretch(1)
+        col = QtWidgets.QVBoxLayout(column_w)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(0)
+
+        brand = QtWidgets.QHBoxLayout()
+        brand.setSpacing(10)
+        logo = QtWidgets.QLabel()
+        logo.setFixedSize(34, 34)
+        logo.setAlignment(QtCore.Qt.AlignCenter)
+        logo.setStyleSheet("background: %s; border-radius: 9px;" % theme.ACCENT)
+        logo.setPixmap(theme.icon_pixmap("lock", 18, "#ffffff"))
+        brand.addWidget(logo)
+        brand.addWidget(theme.label("Whisper", "appName"))
+        brand.addStretch()
+        col.addLayout(brand)
+        col.addStretch(2)
+
+        col.addWidget(theme.label("Hide a secret inside a picture or song", "hero", wrap=True))
+        col.addSpacing(10)
+        col.addWidget(theme.label(
+            "Your file still looks and sounds exactly the same. Only someone "
+            "with the password can read what's inside.", "heroSub", wrap=True))
+        col.addSpacing(32)
+
+        cards = QtWidgets.QHBoxLayout()
+        cards.setSpacing(16)
+        self.hide_card = ChoiceCard(
+            "lock", "Hide a message",
+            "Put a text message or a picture inside a PNG picture or MP3 song.",
+            "Start hiding")
+        self.hide_card.clicked.connect(self.hideRequested)
+        cards.addWidget(self.hide_card)
+        self.reveal_card = ChoiceCard(
+            "search", "Read a hidden message",
+            "Open a file made with Whisper and unlock it with the password.",
+            "Open a file")
+        self.reveal_card.clicked.connect(self.revealRequested)
+        cards.addWidget(self.reveal_card)
+        col.addLayout(cards)
+        col.addSpacing(28)
+
+        # how it works
+        steps = QtWidgets.QHBoxLayout()
+        steps.setSpacing(20)
+        for n, text in ((1, "Pick a picture or song"),
+                        (2, "Add your secret and a password"),
+                        (3, "Save it and share it like any file")):
+            item = QtWidgets.QHBoxLayout()
+            item.setSpacing(8)
+            num = QtWidgets.QLabel(str(n))
+            num.setObjectName("stepNum")
+            num.setFixedSize(24, 24)
+            num.setAlignment(QtCore.Qt.AlignCenter)
+            num.setStyleSheet("border-radius: 12px; font-size: 12px;")
+            item.addWidget(num)
+            item.addWidget(theme.label(text, "hint"))
+            steps.addLayout(item)
+            if n < 3:
+                steps.addStretch()
+        col.addLayout(steps)
+        col.addStretch(3)
+
+        col.addWidget(theme.label(
+            "Whisper hides information well, but it's not a replacement for "
+            "proper encryption tools when the stakes are high.", "faint", wrap=True))
 
 
 class Ui_MainWindow(object):
@@ -80,82 +144,67 @@ class Ui_MainWindow(object):
         self.MainWindow = MainWindow
         MainWindow.setObjectName("StartWindow")
         MainWindow.setWindowTitle("Whisper")
-        MainWindow.resize(640, 560)
-        MainWindow.setMinimumSize(520, 460)
+        MainWindow.resize(900, 780)
+        MainWindow.setMinimumSize(720, 600)
 
-        central = QtWidgets.QWidget()
-        MainWindow.setCentralWidget(central)
-        layout = QtWidgets.QVBoxLayout(central)
-        layout.setContentsMargins(40, 40, 40, 32)
-        layout.setSpacing(0)
+        self.stack = QtWidgets.QStackedWidget()
+        MainWindow.setCentralWidget(self.stack)
 
-        eyebrow = QtWidgets.QLabel("WHISPER  //  STEGANOGRAPHY")
-        eyebrow.setObjectName("eyebrow")
-        layout.addWidget(eyebrow)
-        layout.addSpacing(10)
+        self.home = HomePage()
+        self.home.hideRequested.connect(self.openHideMessageWindow)
+        self.home.revealRequested.connect(self.openRevealContentWindow)
+        self.stack.addWidget(self.home)
+        self.hide_page = None
+        self.reveal_page = None
 
-        headline = QtWidgets.QLabel("Hide information in plain files")
-        headline.setObjectName("headline")
-        layout.addWidget(headline)
-        layout.addSpacing(6)
+        self.home.hide_card.setFocus()
 
-        subhead = QtWidgets.QLabel(
-            "Whisper writes a payload into a PNG image or an MP3 file and "
-            "locks it behind a key. The carrier still opens normally "
-            "everywhere else.")
-        subhead.setObjectName("subhead")
-        subhead.setWordWrap(True)
-        layout.addWidget(subhead)
-        layout.addSpacing(28)
-
-        self.convertButton = OperationButton(
-            "[+]", "Hide Content",
-            "Put text or an image inside a carrier file")
-        self.convertButton.clicked.connect(self.openHideMessageWindow)
-        layout.addWidget(self.convertButton)
-        layout.addSpacing(12)
-
-        self.checkButton = OperationButton(
-            "[>]", "Reveal Content",
-            "Recover what is hidden in a file you already have")
-        self.checkButton.clicked.connect(self.openRevealContentWindow)
-        layout.addWidget(self.checkButton)
-
-        layout.addStretch()
-
-        footer = QtWidgets.QLabel(
-            "Whisper hides data and locks it with a key. Treat it as "
-            "concealment, not as a guarantee of secrecy.")
-        footer.setObjectName("note")
-        footer.setWordWrap(True)
-        layout.addWidget(footer)
-
-        self.convertButton.setFocus()
+    def goHome(self):
+        self.MainWindow.setWindowTitle("Whisper")
+        self.stack.setCurrentWidget(self.home)
 
     def openHideMessageWindow(self):
-        from gui.HideMessage.hideMessage import Ui_MainWindow as HideMessageUI
-        self.hide_message_window = QtWidgets.QMainWindow()
-        self.ui_hide_message = HideMessageUI()
-        self.ui_hide_message.setupUi(self.hide_message_window)
-        self.hide_message_window.show()
-        # self.MainWindow, not a module-level global: the old code closed a
-        # name that only existed when this file was run directly.
-        self.MainWindow.close()
+        if self.hide_page is None:
+            from gui.HideMessage.hideMessage import HidePage
+            self.hide_page = HidePage(on_back=self.goHome)
+            self.stack.addWidget(self.hide_page)
+        self.MainWindow.setWindowTitle("Whisper — Hide a message")
+        self.stack.setCurrentWidget(self.hide_page)
 
     def openRevealContentWindow(self):
-        from gui.RevealContent.revealContent import Ui_MainWindow as RevealContentUI
-        self.reveal_window = QtWidgets.QMainWindow()
-        self.ui_reveal = RevealContentUI()
-        self.ui_reveal.setupUi(self.reveal_window)
-        self.reveal_window.show()
-        self.MainWindow.close()
+        if self.reveal_page is None:
+            from gui.RevealContent.revealContent import RevealPage
+            self.reveal_page = RevealPage(on_back=self.goHome)
+            self.stack.addWidget(self.reveal_page)
+        self.MainWindow.setWindowTitle("Whisper — Read a hidden message")
+        self.stack.setCurrentWidget(self.reveal_page)
 
     def retranslateUi(self, MainWindow):
-        """Kept for compatibility with the generated-code call pattern."""
         pass
 
 
+def _excepthook(exc_type, exc, tb):
+    """Show unhandled errors instead of letting PyQt5 abort silently.
+
+    Since PyQt 5.5, an exception escaping a slot (e.g. a button handler)
+    calls qFatal() and kills the process with no traceback on Windows.
+    """
+    import traceback
+    text = "".join(traceback.format_exception(exc_type, exc, tb))
+    sys.stderr.write(text)
+    if QtWidgets.QApplication.instance() is not None:
+        box = QtWidgets.QMessageBox()
+        box.setIcon(QtWidgets.QMessageBox.Critical)
+        box.setWindowTitle("Whisper - error")
+        box.setText("%s: %s" % (exc_type.__name__, exc))
+        box.setDetailedText(text)
+        box.exec_()
+
+
 def main():
+    sys.excepthook = _excepthook
+    QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
+    QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
     app = QtWidgets.QApplication(sys.argv)
     theme.apply(app)
     window = QtWidgets.QMainWindow()
