@@ -1,34 +1,22 @@
-"""The Reveal window: recover a payload from a file that carries one.
+"""The Reveal page: read a secret hidden in a file made by Whisper.
 
-Rewritten from the generated Qt Designer version, which had the same
-converter layout as the Hide window and three specific problems beyond
-its looks. Its Decode button was connected to two different handlers, so
-one click ran both and each overwrote the other's result. It read the
-file path from a label that only ever held the file's base name, so
-decoding failed unless the app happened to be running in that directory.
-And it ran the engine on the UI thread, so the window froze for the whole
-operation.
+Choose the file, say what kind of secret to expect, enter the password,
+and press Unlock. Whether the file carries a Whisper secret at all can be
+told without the password (Whisper appends a small marker), so the file
+card says so straight away.
 
-The layout follows the order the work happens in:
-
-    01 SOURCE -> 02 KEY -> 03 OPERATION -> 04 RECOVERED
-
-A payload can be text or a hidden image, and which one it is cannot be
-told from the file, so stage 01 asks. Getting it wrong is safe: the
-window says the payload is not of that kind rather than showing rubbish.
+Engine calls are unchanged from the previous version. Extraction runs on
+a QThread so the window never freezes.
 """
 
 import os
 import sys
-from datetime import datetime
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 import gui  # sets sys.path for both the GUI and the engine
 
 from gui import theme
-# Flat import, matching how the engine imports itself (see the note in
-# the Hide window).
 from StegoTextPass import StegoTextPass
 
 MODE_TEXT = "text"
@@ -55,366 +43,271 @@ class ExtractWorker(QtCore.QThread):
             self.failed.emit(str(exc))
             return
         if result is None:
-            # decode_with_password reports its reason on the console and
-            # returns None; the window has to say something useful, and
-            # the wrong key is by far the most common cause.
             self.failed.emit(
-                "Nothing could be recovered. The key may be wrong, the file "
-                "may hold no payload, or the payload may not be of the kind "
-                "selected above.")
+                "Couldn't unlock this file. Check the password, and that "
+                "“What's hidden” matches what was put in.")
             return
         self.recovered.emit(result)
 
 
-class Ui_MainWindow(object):
-    """Kept as Ui_MainWindow with setupUi() so the start window's
-    navigation keeps working unchanged."""
+class RevealPage(theme.Page):
 
-    def setupUi(self, MainWindow):
-        self.MainWindow = MainWindow
+    def __init__(self, on_back=None, parent=None):
+        super(RevealPage, self).__init__("Read a hidden message", on_back, parent)
         self._worker = None
-        self._ready = False
         self._recovered_image = None
         self._recovered_text = ""
 
-        MainWindow.setObjectName("RevealWindow")
-        MainWindow.setWindowTitle("Whisper - Reveal Content")
-        MainWindow.resize(940, 720)
-        MainWindow.setMinimumSize(720, 500)
-        MainWindow.setAcceptDrops(True)
-        MainWindow.dragEnterEvent = self._drag_enter
-        MainWindow.dropEvent = self._drop
+        self.column.addWidget(self._source_step())
+        self.column.addWidget(self._key_step())
+        self.column.addWidget(self._result_card())
+        self.column.addStretch()
 
-        page = theme.scrollable(MainWindow)
-        head, self.chip = theme.masthead(
-            "WHISPER  //  EXTRACT",
-            "Recover what is hidden in a file",
-            "Point at a file Whisper produced and give the key it was made "
-            "with. Nothing is written to disk until you save it.")
-        page.addLayout(head)
-        page.addWidget(self._source_stage())
-        page.addWidget(self._key_stage())
-        page.addWidget(self._operation_stage())
-        page.addWidget(self._result_stage())
-        page.addStretch()
-
-        self._ready = True
-        self._on_source_changed()
-        self._log("Ready. Choose a file to examine.")
-
-    # -- stage 01 ------------------------------------------------------
-
-    def _source_stage(self):
-        frame, content = theme.module("01", "SOURCE")
-
-        row = QtWidgets.QHBoxLayout()
-        row.setSpacing(8)
-        self.source_input = QtWidgets.QLineEdit()
-        self.source_input.setPlaceholderText(
-            "Path to the file holding the payload, or drop one on this window")
-        self.source_input.textChanged.connect(self._on_source_changed)
-        row.addWidget(self.source_input, 1)
-        browse = QtWidgets.QPushButton("BROWSE")
-        browse.clicked.connect(self._browse_source)
-        row.addWidget(browse)
-        content.addLayout(row)
-
-        meta = QtWidgets.QHBoxLayout()
-        meta.setSpacing(26)
-        kind_box, self.out_kind = theme.readout("TYPE")
-        size_box, self.out_size = theme.readout("FILE SIZE")
-        mark_box, self.out_mark = theme.readout("WHISPER PAYLOAD")
-        for box in (kind_box, size_box, mark_box):
-            meta.addLayout(box)
-        meta.addStretch()
-        content.addLayout(meta)
-
-        content.addWidget(theme.micro_label("EXPECTED PAYLOAD"))
-        switch = QtWidgets.QHBoxLayout()
-        switch.setSpacing(6)
-        self.mode_text = QtWidgets.QRadioButton("TEXT")
-        self.mode_image = QtWidgets.QRadioButton("IMAGE FILE")
-        self.mode_text.setChecked(True)
-        group = QtWidgets.QButtonGroup(self.MainWindow)
-        group.addButton(self.mode_text)
-        group.addButton(self.mode_image)
-        self._mode_group = group
-        switch.addWidget(self.mode_text)
-        switch.addWidget(self.mode_image)
-        switch.addStretch()
-        content.addLayout(switch)
-        return frame
-
-    # -- stage 02 ------------------------------------------------------
-
-    def _key_stage(self):
-        frame, content = theme.module("02", "KEY")
-
-        row = QtWidgets.QHBoxLayout()
-        row.setSpacing(8)
-        self.key_input = QtWidgets.QLineEdit()
-        self.key_input.setEchoMode(QtWidgets.QLineEdit.Password)
-        self.key_input.setPlaceholderText("The key this file was made with")
-        self.key_input.returnPressed.connect(self._start_extract)
-        row.addWidget(self.key_input, 1)
-        self.reveal_btn = QtWidgets.QPushButton("SHOW")
-        self.reveal_btn.setCheckable(True)
-        self.reveal_btn.toggled.connect(self._toggle_key)
-        row.addWidget(self.reveal_btn)
-        content.addLayout(row)
-
-        note = QtWidgets.QLabel(
-            "The cipher is read from the file itself, so there is nothing "
-            "else to match. A wrong key is refused outright rather than "
-            "producing rubbish that looks like a payload.")
-        note.setObjectName("note")
-        note.setWordWrap(True)
-        content.addWidget(note)
-        return frame
-
-    # -- stage 03 ------------------------------------------------------
-
-    def _operation_stage(self):
-        frame, content = theme.module("03", "OPERATION")
-
-        actions = QtWidgets.QHBoxLayout()
-        actions.setSpacing(8)
-        self.extract_btn = QtWidgets.QPushButton("EXTRACT PAYLOAD")
+        self.banner = theme.Banner()
+        self.actions.addWidget(self.banner, 1)
+        self.extract_btn = QtWidgets.QPushButton("Unlock")
         self.extract_btn.setObjectName("primary")
+        self.extract_btn.setIcon(theme.icon("unlock", 16, "#ffffff"))
+        self.extract_btn.setCursor(QtCore.Qt.PointingHandCursor)
         self.extract_btn.clicked.connect(self._start_extract)
-        actions.addWidget(self.extract_btn)
-        actions.addStretch()
-        self.back_btn = QtWidgets.QPushButton("BACK")
-        self.back_btn.setObjectName("ghost")
-        self.back_btn.clicked.connect(self._go_back)
-        actions.addWidget(self.back_btn)
-        content.addLayout(actions)
+        self.actions.addWidget(self.extract_btn, 0, QtCore.Qt.AlignRight)
 
-        status_row = QtWidgets.QHBoxLayout()
-        status_row.setSpacing(10)
-        status_row.addWidget(theme.micro_label("STATUS"))
-        self.status_label = QtWidgets.QLabel("Nothing extracted yet.")
-        self.status_label.setObjectName("note")
-        self.status_label.setWordWrap(True)
-        status_row.addWidget(self.status_label, 1)
-        content.addLayout(status_row)
-        return frame
+    # -- step 1 --------------------------------------------------------
 
-    # -- stage 04 ------------------------------------------------------
+    def _source_step(self):
+        self.step1 = theme.StepCard(
+            1, "Choose the file with the secret",
+            "A PNG picture or MP3 song that was saved with Whisper.")
+        self.source = theme.FilePicker(
+            "Drop the file here", "or click to browse",
+            "Choose the file with the secret",
+            "Pictures and songs (*.png *.mp3);;PNG picture (*.png);;"
+            "MP3 song (*.mp3);;All files (*)")
+        self.source.fileChanged.connect(self._on_source_changed)
+        self.step1.body.addWidget(self.source)
 
-    def _result_stage(self):
-        frame, content = theme.module("04", "RECOVERED")
+        self.mode = theme.Segmented([("Text message", "text"), ("Picture", "image")])
+        self.mode.changed.connect(lambda *_: self._clear_result())
+        self.mode_hint = theme.label(
+            "Pick what was hidden in this file.", "hint", wrap=True)
+        self.step1.body.addLayout(theme.field("What's hidden?", self.mode, self.mode_hint))
+        return self.step1
+
+    # -- step 2 --------------------------------------------------------
+
+    def _key_step(self):
+        self.step2 = theme.StepCard(
+            2, "Enter the password",
+            "The same password that was used to hide the message.")
+        self.key = theme.PasswordField("Password")
+        self.key.edit.returnPressed.connect(self._start_extract)
+        self.key.edit.textChanged.connect(
+            lambda t: self.step2.set_done(bool(t)))
+        self.step2.body.addWidget(self.key)
+        return self.step2
+
+    # -- result --------------------------------------------------------
+
+    def _result_card(self):
+        self.result_card = QtWidgets.QFrame()
+        self.result_card.setObjectName("card")
+        lay = QtWidgets.QVBoxLayout(self.result_card)
+        lay.setContentsMargins(24, 20, 24, 22)
+        lay.setSpacing(14)
+
+        head = QtWidgets.QHBoxLayout()
+        head.setSpacing(10)
+        head.addWidget(theme.icon_label("check", 22, theme.SUCCESS))
+        self.result_title = theme.label("Hidden message", "stepTitle")
+        head.addWidget(self.result_title)
+        head.addStretch()
+        lay.addLayout(head)
 
         self.result_stack = QtWidgets.QStackedWidget()
-
         self.result_text = QtWidgets.QPlainTextEdit()
         self.result_text.setReadOnly(True)
-        self.result_text.setPlaceholderText(
-            "The recovered payload appears here.")
-        self.result_text.setMinimumHeight(150)
+        self.result_text.setMinimumHeight(140)
         self.result_stack.addWidget(self.result_text)
-
-        self.result_image = QtWidgets.QLabel("")
+        self.result_image = QtWidgets.QLabel()
         self.result_image.setAlignment(QtCore.Qt.AlignCenter)
-        self.result_image.setMinimumHeight(150)
+        self.result_image.setMinimumHeight(160)
         self.result_image.setStyleSheet(
-            "background: %s; border: 1px solid %s;"
-            % (theme.PANEL_DEEP, theme.RULE))
+            "background: %s; border: 1px solid %s; border-radius: 10px; padding: 8px;"
+            % (theme.SURFACE_ALT, theme.BORDER))
         self.result_stack.addWidget(self.result_image)
-        content.addWidget(self.result_stack)
+        lay.addWidget(self.result_stack)
 
-        save_row = QtWidgets.QHBoxLayout()
-        save_row.setSpacing(8)
-        self.save_btn = QtWidgets.QPushButton("SAVE PAYLOAD")
-        self.save_btn.setObjectName("secondary")
-        self.save_btn.setEnabled(False)
-        self.save_btn.clicked.connect(self._save)
-        save_row.addWidget(self.save_btn)
-        self.copy_btn = QtWidgets.QPushButton("COPY TEXT")
-        self.copy_btn.setEnabled(False)
+        buttons = QtWidgets.QHBoxLayout()
+        buttons.setSpacing(8)
+        self.copy_btn = QtWidgets.QPushButton("Copy text")
         self.copy_btn.clicked.connect(self._copy)
-        save_row.addWidget(self.copy_btn)
-        save_row.addStretch()
-        content.addLayout(save_row)
+        buttons.addWidget(self.copy_btn)
+        self.save_btn = QtWidgets.QPushButton("Save to file…")
+        self.save_btn.clicked.connect(self._save)
+        buttons.addWidget(self.save_btn)
+        buttons.addStretch()
+        lay.addLayout(buttons)
 
-        content.addWidget(theme.micro_label("OPERATION LOG"))
-        self.log_view = QtWidgets.QPlainTextEdit()
-        self.log_view.setObjectName("log")
-        self.log_view.setReadOnly(True)
-        self.log_view.setFixedHeight(84)
-        content.addWidget(self.log_view)
-        return frame
+        self.result_card.hide()
+        return self.result_card
 
     # -- helpers -------------------------------------------------------
 
-    def _log(self, message):
-        """One timestamped line. Never receives a key or a payload."""
-        self.log_view.appendPlainText(
-            "%s  %s" % (datetime.now().strftime("%H:%M:%S"), message))
-
     def _mode(self):
-        return MODE_TEXT if self.mode_text.isChecked() else MODE_IMAGE
+        return MODE_TEXT if self.mode.index() == 0 else MODE_IMAGE
 
-    def _toggle_key(self, shown):
-        self.key_input.setEchoMode(
-            QtWidgets.QLineEdit.Normal if shown else QtWidgets.QLineEdit.Password)
-        self.reveal_btn.setText("HIDE" if shown else "SHOW")
+    def _clear_result(self):
+        self.result_card.hide()
+        self.banner.clear()
 
-    def _on_source_changed(self):
-        if not self._ready:
-            return
-        path = self.source_input.text().strip().strip('"')
-        if not path or not os.path.exists(path):
-            self.out_kind.setText("--" if not path else "NOT FOUND")
-            self.out_size.setText("--")
-            self.out_mark.setText("--")
+    def _on_source_changed(self, path):
+        self._clear_result()
+        self.step1.set_done(bool(path))
+        picture_btn = self.mode.buttons[1]
+        picture_btn.setEnabled(True)
+        self.mode_hint.setText("Pick what was hidden in this file.")
+        if not path:
             return
 
+        name = os.path.basename(path)
         extension = os.path.splitext(path)[1].lower()
-        self.out_kind.setText({".png": "PNG IMAGE",
-                               ".mp3": "MP3 AUDIO"}.get(extension, "OTHER"))
-        self.out_size.setText(theme.human_bytes(os.path.getsize(path)))
+        size = theme.human_bytes(os.path.getsize(path)) if os.path.exists(path) else ""
+        card = self.source.card
+        if extension == ".png":
+            card.set_file(name, "PNG picture · %s" % size, thumb_path=path)
+        elif extension == ".mp3":
+            card.set_file(name, "MP3 song · %s" % size, icon_name="music")
+            self.mode.set_index(0)
+            picture_btn.setEnabled(False)
+            self.mode_hint.setText("Songs can only hold text messages.")
+        else:
+            card.set_file(name, size)
 
-        # The trailer Whisper appends is the one reliable tell that a file
-        # came from this app, and reading it needs no key.
+        # Whisper appends a marker that can be read without the password.
         try:
             with open(path, "rb") as handle:
                 blob = handle.read()
-            self.out_mark.setText(
-                "DETECTED" if b"\n--ALGO--\n" in blob else "NONE")
+            if b"\n--ALGO--\n" in blob:
+                card.set_badge("Contains a Whisper secret", "success")
+            else:
+                card.set_badge("No Whisper secret found", "neutral")
         except OSError:
-            self.out_mark.setText("UNREADABLE")
-
-    def _browse_source(self):
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self.MainWindow, "Select the file to examine", "",
-            "Whisper output (*.png *.mp3);;PNG image (*.png);;"
-            "MP3 audio (*.mp3);;All files (*)")
-        if path:
-            self.source_input.setText(os.path.abspath(path))
-
-    def _drag_enter(self, event):
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-
-    def _drop(self, event):
-        urls = event.mimeData().urls()
-        if urls and urls[0].toLocalFile():
-            self.source_input.setText(os.path.abspath(urls[0].toLocalFile()))
+            card.set_badge("Can't read this file", "danger")
 
     # -- extract -------------------------------------------------------
 
     def _start_extract(self):
-        path = self.source_input.text().strip().strip('"')
+        if self._worker is not None and self._worker.isRunning():
+            return
+        path = self.source.path
         if not path or not os.path.exists(path):
-            theme.set_chip(self.chip, "BLOCKED", theme.CAUTION)
-            self.status_label.setText("Choose a file to examine first.")
+            self.banner.show_message("warn", "Choose the file with the secret first (step 1).")
             return
 
-        self.extract_btn.setEnabled(False)
-        self.save_btn.setEnabled(False)
-        self.copy_btn.setEnabled(False)
         self._recovered_image = None
         self._recovered_text = ""
-        self.result_text.clear()
-        self.result_image.clear()
-        theme.set_chip(self.chip, "EXTRACTING", theme.SIGNAL)
-        self.status_label.setText("Extracting from %s..." % os.path.basename(path))
-        self._log("EXTRACT  source=%s  expecting=%s"
-                  % (os.path.basename(path), self._mode()))
+        self.result_card.hide()
+        self.extract_btn.setEnabled(False)
+        self.extract_btn.setText("Unlocking…")
+        self.banner.show_message("busy", "Unlocking %s…" % os.path.basename(path))
 
-        self._worker = ExtractWorker(path, self.key_input.text(), self._mode())
+        # MP3 files use the audio decode path; the UI mode alone can't say that.
+        extension = os.path.splitext(path)[1].lower()
+        mode = self._mode()
+        data_type = "audio" if (extension == ".mp3" and mode == MODE_TEXT) else mode
+
+        self._worker = ExtractWorker(path, self.key.text(), data_type)
         self._worker.recovered.connect(self._on_recovered)
         self._worker.failed.connect(self._on_failed)
-        self._worker.finished.connect(lambda: self.extract_btn.setEnabled(True))
+        self._worker.finished.connect(self._on_worker_finished)
         self._worker.start()
 
+    def _on_worker_finished(self):
+        self.extract_btn.setEnabled(True)
+        self.extract_btn.setText("Unlock")
+        self._worker = None
+
     def _on_recovered(self, payload):
-        theme.set_chip(self.chip, "RECOVERED", theme.OKAY)
         if isinstance(payload, str):
             self._recovered_text = payload
+            self.result_title.setText("Hidden message")
             self.result_stack.setCurrentWidget(self.result_text)
             self.result_text.setPlainText(payload)
-            self.status_label.setText("Recovered %d characters." % len(payload))
-            self._log("Recovered a text payload of %d characters." % len(payload))
-            self.copy_btn.setEnabled(True)
+            self.copy_btn.show()
+            self.banner.show_message("success", "Unlocked! The message is shown below.")
         else:
             self._recovered_image = payload
+            self.result_title.setText("Hidden picture · %d × %d" % payload.size)
             self.result_stack.setCurrentWidget(self.result_image)
             self.result_image.setPixmap(self._to_pixmap(payload))
-            self.status_label.setText(
-                "Recovered an image payload of %d x %d pixels." % payload.size)
-            self._log("Recovered an image payload of %d x %d." % payload.size)
-        self.save_btn.setEnabled(True)
+            self.copy_btn.hide()
+            self.banner.show_message("success", "Unlocked! The picture is shown below.")
+        self.result_card.show()
+        self.scroll_to(self.result_card)
 
     def _to_pixmap(self, image):
-        """A PIL image as a QPixmap, scaled to the preview area."""
+        """A PIL image as a QPixmap, capped to a fixed preview size."""
         rgb = image.convert("RGB")
         data = rgb.tobytes("raw", "RGB")
         qimage = QtGui.QImage(data, rgb.size[0], rgb.size[1],
                               rgb.size[0] * 3, QtGui.QImage.Format_RGB888)
-        pixmap = QtGui.QPixmap.fromImage(qimage)
-        box = self.result_image.size()
-        if pixmap.width() > box.width() or pixmap.height() > box.height():
-            pixmap = pixmap.scaled(box, QtCore.Qt.KeepAspectRatio,
+        pixmap = QtGui.QPixmap.fromImage(qimage.copy())
+        max_w, max_h = 640, 360
+        if pixmap.width() > max_w or pixmap.height() > max_h:
+            pixmap = pixmap.scaled(max_w, max_h, QtCore.Qt.KeepAspectRatio,
                                    QtCore.Qt.SmoothTransformation)
         return pixmap
 
     def _on_failed(self, message):
-        theme.set_chip(self.chip, "FAILED", theme.ALERT)
-        self.status_label.setText(message)
-        self.result_stack.setCurrentWidget(self.result_text)
-        self._log("FAILED  extraction did not produce a payload.")
+        self.banner.show_message("error", message)
 
     # -- results -------------------------------------------------------
 
     def _save(self):
         if self._recovered_image is not None:
             path, _ = QtWidgets.QFileDialog.getSaveFileName(
-                self.MainWindow, "Save the recovered image",
-                "recovered_payload.png", "PNG image (*.png);;All files (*)")
+                self.window(), "Save the hidden picture",
+                "hidden_picture.png", "PNG picture (*.png);;All files (*)")
             if not path:
                 return
             try:
                 self._recovered_image.save(path)
             except Exception as exc:
-                self.status_label.setText("Could not save: %s" % exc)
+                self.banner.show_message("error", "Couldn't save: %s" % exc)
                 return
-            self.status_label.setText("Saved to %s" % path)
-            self._log("Saved the recovered image.")
+        elif self._recovered_text:
+            path, _ = QtWidgets.QFileDialog.getSaveFileName(
+                self.window(), "Save the hidden message", "hidden_message.txt",
+                "Text files (*.txt);;All files (*)")
+            if not path:
+                return
+            try:
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write(self._recovered_text)
+            except OSError as exc:
+                self.banner.show_message("error", "Couldn't save: %s" % exc)
+                return
+        else:
             return
-
-        if not self._recovered_text:
-            return
-        path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self.MainWindow, "Save the recovered text", "recovered_payload.txt",
-            "Text files (*.txt);;All files (*)")
-        if not path:
-            return
-        try:
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write(self._recovered_text)
-        except OSError as exc:
-            self.status_label.setText("Could not save: %s" % exc)
-            return
-        self.status_label.setText("Saved to %s" % path)
-        self._log("Saved the recovered text.")
+        self.banner.show_message("success", "Saved as <b>%s</b>." % os.path.basename(path))
 
     def _copy(self):
         if self._recovered_text:
             QtWidgets.QApplication.clipboard().setText(self._recovered_text)
-            self.status_label.setText("Copied to the clipboard.")
+            self.banner.show_message("success", "Copied to the clipboard.")
 
-    def _go_back(self):
-        from gui.StartWindow.mainWindow import Ui_MainWindow as StartUI
-        self._start_window = QtWidgets.QMainWindow()
-        self._start_ui = StartUI()
-        self._start_ui.setupUi(self._start_window)
-        self._start_window.show()
-        self.MainWindow.close()
+
+class Ui_MainWindow(object):
+    """Lets the page run on its own in a QMainWindow."""
+
+    def setupUi(self, MainWindow):
+        self.MainWindow = MainWindow
+        MainWindow.setWindowTitle("Whisper — Read a hidden message")
+        MainWindow.resize(880, 760)
+        self.page = RevealPage()
+        MainWindow.setCentralWidget(self.page)
 
     def retranslateUi(self, MainWindow):
-        """Kept for compatibility with the generated-code call pattern."""
         pass
 
 
