@@ -4,3 +4,9 @@ __pycache__/
 venv/
 Whisper/venv/
 .idea/
+.vscode/
+.pytest_cache/
+build/
+dist/
+*.spec
+*.whisper-tmp

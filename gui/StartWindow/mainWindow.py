@@ -5,7 +5,11 @@ screens doesn't close and reopen windows (which made the window jump
 around and lose its size).
 """
 
+import os
 import sys
+
+if __package__ in (None, ""):          # started as a script, e.g. from PyCharm
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 
@@ -89,7 +93,7 @@ class HomePage(QtWidgets.QWidget):
         col.addLayout(brand)
         col.addStretch(2)
 
-        col.addWidget(theme.label("Hide a secret inside a picture or song", "hero", wrap=True))
+        col.addWidget(theme.label("Hide a secret inside a picture or audio file", "hero", wrap=True))
         col.addSpacing(10)
         col.addWidget(theme.label(
             "Your file still looks and sounds exactly the same. Only someone "
@@ -100,7 +104,7 @@ class HomePage(QtWidgets.QWidget):
         cards.setSpacing(16)
         self.hide_card = ChoiceCard(
             "lock", "Hide a message",
-            "Put a text message or a picture inside a PNG picture or MP3 song.",
+            "Put a text message or a picture inside a picture, WAV or MP3 file.",
             "Start hiding")
         self.hide_card.clicked.connect(self.hideRequested)
         cards.addWidget(self.hide_card)
@@ -116,7 +120,7 @@ class HomePage(QtWidgets.QWidget):
         # how it works
         steps = QtWidgets.QHBoxLayout()
         steps.setSpacing(20)
-        for n, text in ((1, "Pick a picture or song"),
+        for n, text in ((1, "Pick a picture or audio file"),
                         (2, "Add your secret and a password"),
                         (3, "Save it and share it like any file")):
             item = QtWidgets.QHBoxLayout()
@@ -135,8 +139,9 @@ class HomePage(QtWidgets.QWidget):
         col.addStretch(3)
 
         col.addWidget(theme.label(
-            "Whisper hides information well, but it's not a replacement for "
-            "proper encryption tools when the stakes are high.", "faint", wrap=True))
+            "Secrets are encrypted with AES-256-GCM and a scrypt-derived key. "
+            "Hiding is not invisibility: statistical analysis can still tell that "
+            "a file was changed. See SECURITY.md.", "faint", wrap=True))
 
 
 class Ui_MainWindow(object):
@@ -195,7 +200,7 @@ def _excepthook(exc_type, exc, tb):
     if QtWidgets.QApplication.instance() is not None:
         box = QtWidgets.QMessageBox()
         box.setIcon(QtWidgets.QMessageBox.Critical)
-        box.setWindowTitle("Whisper - error")
+        box.setWindowTitle("Whisper — error")
         box.setText("%s: %s" % (exc_type.__name__, exc))
         box.setDetailedText(text)
         box.exec_()
@@ -206,7 +211,9 @@ def main():
     QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
     QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
     app = QtWidgets.QApplication(sys.argv)
+    app.setApplicationName("Whisper")
     theme.apply(app)
+    app.setWindowIcon(theme.icon("lock", 64, theme.ACCENT))
     window = QtWidgets.QMainWindow()
     ui = Ui_MainWindow()
     ui.setupUi(window)
