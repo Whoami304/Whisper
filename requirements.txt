@@ -1,0 +1,10 @@
+# PyQt5 5.15.11 on Windows is built against Qt 5.15.14+, but the newest Qt
+# wheel for Windows is PyQt5-Qt5 5.15.2 -> "DLL load failed ... procedure
+# could not be found". 5.15.10 matches Qt 5.15.2.
+PyQt5==5.15.10 ; sys_platform == "win32"
+PyQt5-Qt5==5.15.2 ; sys_platform == "win32"
+PyQt5>=5.15.9 ; sys_platform != "win32"
+Pillow>=10.0
+numpy>=1.24
+cryptography>=41.0
+mutagen>=1.46

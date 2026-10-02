@@ -747,6 +747,39 @@ class UsageBar(QtWidgets.QWidget):
             p.drawRoundedRect(QtCore.QRectF(0, 0, w, self.height()), r, r)
 
 
+class StrengthMeter(QtWidgets.QWidget):
+    """Four short segments and a word: how hard a password is to guess."""
+
+    COLOURS = (DANGER, DANGER, WARN, SUCCESS, SUCCESS)
+
+    def __init__(self, parent=None):
+        super(StrengthMeter, self).__init__(parent)
+        row = QtWidgets.QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        self.segments = []
+        for _ in range(4):
+            seg = QtWidgets.QFrame()
+            seg.setFixedHeight(5)
+            row.addWidget(seg, 1)
+            self.segments.append(seg)
+        row.addSpacing(8)
+        self.word = QtWidgets.QLabel("")
+        self.word.setObjectName("hint")
+        self.word.setMinimumWidth(80)
+        row.addWidget(self.word)
+        self.set_score(0, "")
+
+    def set_score(self, score, word):
+        colour = self.COLOURS[max(0, min(4, score))]
+        lit = 0 if not word else max(1, score)
+        for i, seg in enumerate(self.segments):
+            seg.setStyleSheet("background: %s; border-radius: 2px;"
+                              % (colour if i < lit else "#e8ebf1"))
+        self.word.setText(word)
+        self.word.setStyleSheet("color: %s; font-weight: 600;" % colour if word else "")
+
+
 class Banner(QtWidgets.QFrame):
     """A soft coloured message strip with an icon and optional action."""
 
