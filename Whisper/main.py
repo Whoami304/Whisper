@@ -1,223 +1,145 @@
-from steganography import  *
-from ImageSteganography import *
-from  AudioTextSteganography import *
+"""Whisper command line.
+
+    python -m Whisper.main hide-text  CARRIER OUTPUT  (-m TEXT | -f FILE)
+    python -m Whisper.main hide-image CARRIER OUTPUT  SECRET_PICTURE
+    python -m Whisper.main reveal     FILE  [-o OUT]
+    python -m Whisper.main capacity   CARRIER
+
+The password is asked for interactively (never echoed, never put on the
+command line where it would land in shell history). For scripting, set
+WHISPER_PASSWORD instead.
+"""
+
+import argparse
+import getpass
+import io
 import os
 import sys
 
-# მენიუ ემოჯებს იყენებს, Windows-ის კონსოლი კი ხშირად cp1252-ია და
-# UnicodeEncodeError-ით ვარდებოდა ჯერ კიდევ მენიუს დაბეჭდვისას.
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, OSError, ValueError):
-        pass  # გადამისამართებული ან ძველი ნაკადი — ვტოვებთ როგორც არის
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-#მენიუ  უფრო მარტივად აღსაქმელი გახდეს დავწერე ფუნქციები და ვიძახებ Main()-ში
-def handle_text_steganography():
-    stego = TextSteganography()
-    
-    while True:
-        print("\n📘 Text Steganography:")
-        print("1 - Encode message into image")
-        print("2 - Decode message from image")
-        print("3 - Check file content")
-        print("0 - 🔙 Back to Main Menu")
+import engine  # noqa: E402
 
-        choice = input("Enter your choice: ").strip()
 
-        if choice == "1":
-            message = input("\n📝 Enter the message to hide: ")
-            input_image = input("📷 Enter input image path: ")
-            output_image = input("💾 Enter output image path (.png): ")
+def _password(confirm: bool) -> str:
+    env = os.environ.get("WHISPER_PASSWORD")
+    if env:
+        return env
+    pw = getpass.getpass("Password: ")
+    if not pw:
+        raise engine.WhisperError("A password is required.")
+    if confirm:
+        if getpass.getpass("Repeat password: ") != pw:
+            raise engine.WhisperError("The passwords don't match.")
+        score, word = engine.password_strength(pw)
+        if score <= 1:
+            print("Warning: this password is %s." % word.lower(), file=sys.stderr)
+    return pw
 
-            try:
-                print(stego.encode_info(input_image, message, output_image))
-            except StegoError as e:
-                print(f"\n❌ {e}")
 
-        elif choice == "2":
-            image_path = input("\n📷 Enter image with hidden message: ").strip()
-            decoded_msg = stego.decode_info(image_path)
-            if decoded_msg is None:
-                print("\n❌ No hidden message found (or the file could not be read).")
-                continue
-            print(f"\n📤 Decoded message: {decoded_msg}")
+def cmd_hide_text(args) -> int:
+    if (args.message is None) == (args.file is None):
+        raise engine.WhisperError("Give exactly one of -m TEXT or -f FILE.")
+    if args.file is not None:
+        with open(args.file, "r", encoding="utf-8") as fh:
+            message = fh.read()
+    else:
+        message = args.message
+    out = engine.hide_text(args.carrier, args.output, message, _password(True))
+    print("Saved: %s" % out)
+    return 0
 
-            save = input("\n💾 Save message to file? (yes/no): ").strip().lower()
-            if save == "yes":
-                filename = input("Enter filename and path :>> ")
 
-                try:
-                    with open(filename, "w", encoding="utf-8") as f:
-                        f.write(decoded_msg)
-                    print(f"\n✅ Saved to {filename}")
-                except OSError as e:
-                    print(f"\n❌ Could not save the file: {e}")
-            else:
-                print('\nMessage was not saved.')
-        elif choice == "3":
-            img_path = input("\n📂 Enter image path (.png only): ").strip()
-            has_content = stego.Cheak_Content(img_path)
-            result = (f"content was found in {img_path}") if has_content else (f"content was not found in {img_path}")
-            print(result)
+def cmd_hide_image(args) -> int:
+    out = engine.hide_image(args.carrier, args.output, args.secret, _password(True))
+    print("Saved: %s" % out)
+    return 0
 
-        elif choice == "0":
-            return
 
+def cmd_reveal(args) -> int:
+    result = engine.reveal(args.file, _password(False))
+    if result.legacy:
+        print("Note: this file was made by an old Whisper version with weak "
+              "protection. Re-hide the secret with this version.", file=sys.stderr)
+    if result.text is not None:
+        if args.output:
+            with open(args.output, "w", encoding="utf-8", newline="") as fh:
+                fh.write(result.text)
+            print("Saved: %s" % args.output)
         else:
-            print("\n❌ Invalid option. Try again.")
+            print(result.text)
+        return 0
+    output = args.output
+    if not output:
+        from PIL import Image
+        with Image.open(io.BytesIO(result.image_bytes)) as im:
+            ext = {"JPEG": ".jpg"}.get(im.format, "." + (im.format or "png").lower())
+        output = "hidden_picture" + ext
+    if os.path.exists(output) and not args.force:
+        raise engine.WhisperError("%s already exists (use --force to overwrite)." % output)
+    with open(output, "wb") as fh:
+        fh.write(result.image_bytes)
+    print("Hidden picture saved: %s" % output)
+    return 0
 
 
-def handle_image_steganography():
-    while True:
-        print("\n🖼️ Image Steganography:")
-        print("1 - Encode one image into another")
-        print("2 - Decode hidden image")
-        print("3)- Check image content")
-        print("0 - 🔙 Back to Main Menu")
-
-        choice = input("Choose option: >> ").strip()
-
-        if choice == "1":
-            cover_file = input("\n📂 Enter cover image path: ").strip()
-            secret_file = input("🕵️ Enter secret image path: ").strip()
-            output_file = input("💾 Enter output image path: ").strip()
-
-            if not os.path.exists(cover_file):
-                print(f"\n❌ File not found: {cover_file}")
-                continue
-
-            if not os.path.exists(secret_file):
-                print(f"\n❌ File not found: {secret_file}")
-                continue
-
-            steg = ImageSteganography(num_lsb=2)
-            try:
-                steg.encode_info(cover_file, secret_file, output_file)
-                print(f"✅ Encoded image saved to: {output_file}")
-                print("ℹ️ Note: this menu uses num_lsb=2. The same value is required to decode it.")
-            except StegoError as e:
-                print(f"\n❌ {e}")
-
-        elif choice == "2":
-            input_file = input("\n📂 Enter image with hidden image: ").strip()
-            output_file = input("💾 Enter output path to save decoded image: ").strip()
-
-            steg = ImageSteganography(num_lsb=2)
-            decoded_img = steg.decode_info(input_file)
-
-            if decoded_img:
-                try:
-                    decoded_img.save(output_file)
-                    print(f"\n✅ Decoded image saved to: {output_file}")
-                except Exception as e:
-                    print(f"\n❌ Error saving image: {e}")
-            else:
-                print("\n❌ Decoding failed.")
-
-        if choice == '3':
-
-            steganographer = ImageSteganography(num_lsb=2)
-            check_path = input("📂 Enter image path to check (.png): ").strip()
-
-            if not os.path.exists(check_path):
-                print("❌ File not found.")
-                continue
-
-            has_content = steganographer.check_content(check_path)
-
-            if has_content is True:
-                print(f"✅ Hidden content found in {check_path}")
-            elif has_content is False:
-                print(f"❌ No hidden content in {check_path}")
-            else:
-                print(has_content)
-
-        elif choice == "0":
-            break
+def cmd_capacity(args) -> int:
+    cap = engine.capacity(args.carrier)
+    if cap is None:
+        print("MP3: no fixed limit (stored in an ID3 tag).")
+    else:
+        print("%s (%d bytes)" % (engine.human_bytes(cap), cap))
+    return 0
 
 
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="whisper", description="Hide encrypted secrets in "
+                                "pictures and audio files.")
+    sub = p.add_subparsers(dest="command", required=True)
 
-def handle_AudioTextSeteganography():
-  while True:
-    st = AudioTextSteganography()
+    t = sub.add_parser("hide-text", help="hide a text message")
+    t.add_argument("carrier")
+    t.add_argument("output")
+    t.add_argument("-m", "--message")
+    t.add_argument("-f", "--file", help="read the message from a UTF-8 text file")
+    t.set_defaults(func=cmd_hide_text)
 
-    print("\n========AudioText Steganography===============")
-    print("1 - Encode one Text in audio")
-    print("2 - Decode hidden message from audio")
-    print("3)- Check image content")
-    print("0 - 🔙 Back to Main Menu")
+    i = sub.add_parser("hide-image", help="hide a picture")
+    i.add_argument("carrier")
+    i.add_argument("output")
+    i.add_argument("secret", help="the picture to hide")
+    i.set_defaults(func=cmd_hide_image)
+
+    r = sub.add_parser("reveal", help="read a hidden secret")
+    r.add_argument("file")
+    r.add_argument("-o", "--output", help="save the secret to this file")
+    r.add_argument("--force", action="store_true", help="overwrite an existing output")
+    r.set_defaults(func=cmd_reveal)
+
+    c = sub.add_parser("capacity", help="how much a carrier can hold")
+    c.add_argument("carrier")
+    c.set_defaults(func=cmd_capacity)
+    return p
 
 
-    make_choice = input("\nChoose operation")
-
-
-    if make_choice == "1":
-
-        secret_msg = input("\nEnter secret message ::>>")
-        audioFile = input("enter audio file namee or path :>>")
-        outAudioFile = input("input output path and name:>>")
-
+def main(argv=None) -> int:
+    for stream in (sys.stdout, sys.stderr):
         try:
-            st.encode_info(secret_msg, audioFile, outAudioFile)
-        except StegoError as e:
-            print(f"\n❌ {e}")
-
-    elif make_choice == '2':
-        outAudioFile = input("\nEnter file name with do you want to decode:>>")
-        result = st.decode_info(outAudioFile)
-        if result is None:
-            print("\n❌ No hidden message found (or the file could not be read).")
-            continue
-        print( f"decoded info : {result}" )
-
-        ch_it = input("\ndo you want to save result in any txt file?>>:")
-        if ch_it == "yes":
-           filename = input("Enter filename and path :>> ").strip()
-           try:
-               with open(filename, "w", encoding="utf-8") as f:
-                   f.write(result)
-               print(f"\n✅ Saved to {filename}")
-           except OSError as e:
-               print(f"\n❌ Could not save the file: {e}")
-
-    elif make_choice == "3":
-       audioFile = input("\nEnter audio file :>>")
-       st.Check_Content(audioFile)
-
-    elif make_choice == '0':
-         break
-
-
-def main():
-    while True:
-        print("\n📂 MAIN MENU")
-        print("1 - Text Steganography")
-        print("2 - Image Steganography")
-        print("3 - TextAudio Steganography ")
-        print("0 - ❌ Exit")
-
-        choice = input("\nChoose option: >> ").strip()
-
-        if choice == "0":
-            print("\n👋 Exiting program. Goodbye.")
-            break
-
-        elif choice == "1":
-            handle_text_steganography()
-
-        elif choice == "2":
-            handle_image_steganography()
-
-        elif choice == "3":
-            handle_AudioTextSeteganography()
-        else:
-          print("\n❌ Invalid option. Try again.")
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError, ValueError):
+            pass
+    args = build_parser().parse_args(argv)
+    try:
+        return args.func(args)
+    except engine.WhisperError as exc:
+        print("Error: %s" % exc, file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print("Error: %s" % (exc.strerror or exc), file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 130
 
 
 if __name__ == "__main__":
-    main()
-
-
-
-
+    sys.exit(main())

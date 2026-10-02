@@ -1,53 +1,60 @@
 """The Reveal page: read a secret hidden in a file made by Whisper.
 
-Choose the file, say what kind of secret to expect, enter the password,
-and press Unlock. Whether the file carries a Whisper secret at all can be
-told without the password (Whisper appends a small marker), so the file
-card says so straight away.
+Choose the file, enter the password, press Unlock. Whisper works out by
+itself whether a text message or a picture was hidden. Without the right
+password a Whisper file is indistinguishable from an ordinary one, so the
+page never claims to know in advance whether a secret is present.
 
-Engine calls are unchanged from the previous version. Extraction runs on
-a QThread so the window never freezes.
+Extraction runs on a QThread so the window never freezes.
 """
 
+import html
+import io
 import os
 import sys
+
+if __package__ in (None, ""):          # started as a script, e.g. from PyCharm
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 import gui  # sets sys.path for both the GUI and the engine
-
+import engine
 from gui import theme
-from StegoTextPass import StegoTextPass
 
-MODE_TEXT = "text"
-MODE_IMAGE = "image"
+SOURCE_FILTER = ("Pictures and audio (*.png *.bmp *.tif *.tiff *.wav *.mp3);;"
+                 "Pictures (*.png *.bmp *.tif *.tiff);;WAV audio (*.wav);;"
+                 "MP3 audio (*.mp3);;All files (*)")
+
+# PIL format name -> (extension, file-dialog filter)
+_IMAGE_SAVE = {
+    "PNG": (".png", "PNG picture (*.png)"),
+    "JPEG": (".jpg", "JPEG picture (*.jpg *.jpeg)"),
+    "GIF": (".gif", "GIF picture (*.gif)"),
+    "BMP": (".bmp", "BMP picture (*.bmp)"),
+    "WEBP": (".webp", "WebP picture (*.webp)"),
+    "TIFF": (".tif", "TIFF picture (*.tif *.tiff)"),
+}
 
 
 class ExtractWorker(QtCore.QThread):
-    """Runs one extraction off the UI thread."""
+    """Runs one reveal off the UI thread."""
 
     recovered = QtCore.pyqtSignal(object)
     failed = QtCore.pyqtSignal(str)
 
-    def __init__(self, path, password, data_type, parent=None):
+    def __init__(self, path, password, parent=None):
         super(ExtractWorker, self).__init__(parent)
         self.path = path
         self.password = password
-        self.data_type = data_type
 
     def run(self):
         try:
-            result = StegoTextPass().decode_with_password(
-                self.path, self.password, self.data_type)
-        except Exception as exc:
+            self.recovered.emit(engine.reveal(self.path, self.password))
+        except engine.WhisperError as exc:
             self.failed.emit(str(exc))
-            return
-        if result is None:
-            self.failed.emit(
-                "Couldn't unlock this file. Check the password, and that "
-                "“What's hidden” matches what was put in.")
-            return
-        self.recovered.emit(result)
+        except Exception as exc:                      # never let a worker die silently
+            self.failed.emit("Unexpected error: %s" % exc)
 
 
 class RevealPage(theme.Page):
@@ -55,8 +62,9 @@ class RevealPage(theme.Page):
     def __init__(self, on_back=None, parent=None):
         super(RevealPage, self).__init__("Read a hidden message", on_back, parent)
         self._worker = None
-        self._recovered_image = None
-        self._recovered_text = ""
+        self._image_bytes = None
+        self._image_format = "PNG"
+        self._text = ""
 
         self.column.addWidget(self._source_step())
         self.column.addWidget(self._key_step())
@@ -77,20 +85,13 @@ class RevealPage(theme.Page):
     def _source_step(self):
         self.step1 = theme.StepCard(
             1, "Choose the file with the secret",
-            "A PNG picture or MP3 song that was saved with Whisper.")
+            "A picture (PNG), WAV or MP3 that was saved with Whisper. "
+            "Whisper detects whether it holds text or a picture.")
         self.source = theme.FilePicker(
             "Drop the file here", "or click to browse",
-            "Choose the file with the secret",
-            "Pictures and songs (*.png *.mp3);;PNG picture (*.png);;"
-            "MP3 song (*.mp3);;All files (*)")
+            "Choose the file with the secret", SOURCE_FILTER)
         self.source.fileChanged.connect(self._on_source_changed)
         self.step1.body.addWidget(self.source)
-
-        self.mode = theme.Segmented([("Text message", "text"), ("Picture", "image")])
-        self.mode.changed.connect(lambda *_: self._clear_result())
-        self.mode_hint = theme.label(
-            "Pick what was hidden in this file.", "hint", wrap=True)
-        self.step1.body.addLayout(theme.field("What's hidden?", self.mode, self.mode_hint))
         return self.step1
 
     # -- step 2 --------------------------------------------------------
@@ -98,11 +99,10 @@ class RevealPage(theme.Page):
     def _key_step(self):
         self.step2 = theme.StepCard(
             2, "Enter the password",
-            "The same password that was used to hide the message.")
+            "The same password that was used to hide the secret.")
         self.key = theme.PasswordField("Password")
         self.key.edit.returnPressed.connect(self._start_extract)
-        self.key.edit.textChanged.connect(
-            lambda t: self.step2.set_done(bool(t)))
+        self.key.edit.textChanged.connect(lambda t: self.step2.set_done(bool(t)))
         self.step2.body.addWidget(self.key)
         return self.step2
 
@@ -122,6 +122,12 @@ class RevealPage(theme.Page):
         head.addWidget(self.result_title)
         head.addStretch()
         lay.addLayout(head)
+
+        self.legacy_note = theme.label(
+            "This file was made by an older Whisper version that used weak "
+            "protection. Hide the secret again with this version to keep it safe.",
+            "hint", wrap=True)
+        lay.addWidget(self.legacy_note)
 
         self.result_stack = QtWidgets.QStackedWidget()
         self.result_text = QtWidgets.QPlainTextEdit()
@@ -153,46 +159,34 @@ class RevealPage(theme.Page):
 
     # -- helpers -------------------------------------------------------
 
-    def _mode(self):
-        return MODE_TEXT if self.mode.index() == 0 else MODE_IMAGE
-
     def _clear_result(self):
+        self._image_bytes = None
+        self._text = ""
+        self.result_text.clear()
+        self.result_image.clear()
         self.result_card.hide()
         self.banner.clear()
 
     def _on_source_changed(self, path):
         self._clear_result()
         self.step1.set_done(bool(path))
-        picture_btn = self.mode.buttons[1]
-        picture_btn.setEnabled(True)
-        self.mode_hint.setText("Pick what was hidden in this file.")
         if not path:
             return
-
         name = os.path.basename(path)
-        extension = os.path.splitext(path)[1].lower()
         size = theme.human_bytes(os.path.getsize(path)) if os.path.exists(path) else ""
         card = self.source.card
-        if extension == ".png":
-            card.set_file(name, "PNG picture · %s" % size, thumb_path=path)
-        elif extension == ".mp3":
-            card.set_file(name, "MP3 song · %s" % size, icon_name="music")
-            self.mode.set_index(0)
-            picture_btn.setEnabled(False)
-            self.mode_hint.setText("Songs can only hold text messages.")
+        kind = engine.carrier_kind(path)
+        if kind == "image":
+            card.set_file(name, "Picture · %s" % size, thumb_path=path)
+            lossy = os.path.splitext(path)[1].lower() not in engine.LOSSLESS_IMAGE_EXTENSIONS
+            card.set_badge("Whisper never saves JPEG/WebP — use the PNG it made" if lossy else "",
+                           "warn")
+        elif kind in ("wav", "mp3"):
+            card.set_file(name, "%s audio · %s" % (kind.upper(), size), icon_name="music")
+            card.set_badge("")
         else:
             card.set_file(name, size)
-
-        # Whisper appends a marker that can be read without the password.
-        try:
-            with open(path, "rb") as handle:
-                blob = handle.read()
-            if b"\n--ALGO--\n" in blob:
-                card.set_badge("Contains a Whisper secret", "success")
-            else:
-                card.set_badge("No Whisper secret found", "neutral")
-        except OSError:
-            card.set_badge("Can't read this file", "danger")
+            card.set_badge("Not supported — choose a picture, WAV or MP3", "danger")
 
     # -- extract -------------------------------------------------------
 
@@ -203,20 +197,20 @@ class RevealPage(theme.Page):
         if not path or not os.path.exists(path):
             self.banner.show_message("warn", "Choose the file with the secret first (step 1).")
             return
+        if engine.carrier_kind(path) is None:
+            self.banner.show_message("warn", "That file type isn't supported. "
+                                             "Choose a picture, WAV or MP3.")
+            return
+        if not self.key.text():
+            self.banner.show_message("warn", "Enter the password (step 2).")
+            return
 
-        self._recovered_image = None
-        self._recovered_text = ""
-        self.result_card.hide()
+        self._clear_result()
         self.extract_btn.setEnabled(False)
         self.extract_btn.setText("Unlocking…")
-        self.banner.show_message("busy", "Unlocking %s…" % os.path.basename(path))
+        self.banner.show_message("busy", "Unlocking %s…" % html.escape(os.path.basename(path)))
 
-        # MP3 files use the audio decode path; the UI mode alone can't say that.
-        extension = os.path.splitext(path)[1].lower()
-        mode = self._mode()
-        data_type = "audio" if (extension == ".mp3" and mode == MODE_TEXT) else mode
-
-        self._worker = ExtractWorker(path, self.key.text(), data_type)
+        self._worker = ExtractWorker(path, self.key.text())
         self._worker.recovered.connect(self._on_recovered)
         self._worker.failed.connect(self._on_failed)
         self._worker.finished.connect(self._on_worker_finished)
@@ -227,94 +221,103 @@ class RevealPage(theme.Page):
         self.extract_btn.setText("Unlock")
         self._worker = None
 
-    def _on_recovered(self, payload):
-        if isinstance(payload, str):
-            self._recovered_text = payload
+    def _on_recovered(self, result):
+        self.legacy_note.setVisible(bool(result.legacy))
+        if result.text is not None:
+            self._text = result.text
             self.result_title.setText("Hidden message")
             self.result_stack.setCurrentWidget(self.result_text)
-            self.result_text.setPlainText(payload)
+            self.result_text.setPlainText(result.text)
             self.copy_btn.show()
             self.banner.show_message("success", "Unlocked! The message is shown below.")
         else:
-            self._recovered_image = payload
-            self.result_title.setText("Hidden picture · %d × %d" % payload.size)
+            try:
+                pixmap, size, fmt = self._to_pixmap(result.image_bytes)
+            except Exception:
+                self.banner.show_message("error", "The hidden picture is damaged and "
+                                                  "can't be shown.")
+                return
+            self._image_bytes = result.image_bytes
+            self._image_format = fmt
+            self.result_title.setText("Hidden picture · %d × %d" % size)
             self.result_stack.setCurrentWidget(self.result_image)
-            self.result_image.setPixmap(self._to_pixmap(payload))
+            self.result_image.setPixmap(pixmap)
             self.copy_btn.hide()
             self.banner.show_message("success", "Unlocked! The picture is shown below.")
         self.result_card.show()
         self.scroll_to(self.result_card)
 
-    def _to_pixmap(self, image):
-        """A PIL image as a QPixmap, capped to a fixed preview size."""
-        rgb = image.convert("RGB")
-        data = rgb.tobytes("raw", "RGB")
-        qimage = QtGui.QImage(data, rgb.size[0], rgb.size[1],
-                              rgb.size[0] * 3, QtGui.QImage.Format_RGB888)
+    @staticmethod
+    def _to_pixmap(data):
+        """(preview QPixmap, (w, h), PIL format) for encoded picture bytes."""
+        from PIL import Image
+        with Image.open(io.BytesIO(data)) as image:
+            fmt = image.format or "PNG"
+            size = image.size
+            rgb = image.convert("RGB")
+        raw = rgb.tobytes("raw", "RGB")
+        qimage = QtGui.QImage(raw, size[0], size[1], size[0] * 3, QtGui.QImage.Format_RGB888)
         pixmap = QtGui.QPixmap.fromImage(qimage.copy())
-        max_w, max_h = 640, 360
-        if pixmap.width() > max_w or pixmap.height() > max_h:
-            pixmap = pixmap.scaled(max_w, max_h, QtCore.Qt.KeepAspectRatio,
+        if pixmap.width() > 640 or pixmap.height() > 360:
+            pixmap = pixmap.scaled(640, 360, QtCore.Qt.KeepAspectRatio,
                                    QtCore.Qt.SmoothTransformation)
-        return pixmap
+        return pixmap, size, fmt
 
     def _on_failed(self, message):
-        self.banner.show_message("error", message)
+        self.banner.show_message("error", html.escape(message))
 
     # -- results -------------------------------------------------------
 
     def _save(self):
-        if self._recovered_image is not None:
+        if self._image_bytes is not None:
+            ext, flt = _IMAGE_SAVE.get(self._image_format, (".png", "PNG picture (*.png)"))
             path, _ = QtWidgets.QFileDialog.getSaveFileName(
-                self.window(), "Save the hidden picture",
-                "hidden_picture.png", "PNG picture (*.png);;All files (*)")
+                self.window(), "Save the hidden picture", "hidden_picture" + ext,
+                flt + ";;All files (*)")
             if not path:
                 return
-            try:
-                self._recovered_image.save(path)
-            except Exception as exc:
-                self.banner.show_message("error", "Couldn't save: %s" % exc)
-                return
-        elif self._recovered_text:
+            if not os.path.splitext(path)[1]:
+                path += ext
+            data, mode = self._image_bytes, "wb"
+        elif self._text:
             path, _ = QtWidgets.QFileDialog.getSaveFileName(
                 self.window(), "Save the hidden message", "hidden_message.txt",
                 "Text files (*.txt);;All files (*)")
             if not path:
                 return
-            try:
-                with open(path, "w", encoding="utf-8") as handle:
-                    handle.write(self._recovered_text)
-            except OSError as exc:
-                self.banner.show_message("error", "Couldn't save: %s" % exc)
-                return
+            data, mode = self._text, "w"
         else:
             return
-        self.banner.show_message("success", "Saved as <b>%s</b>." % os.path.basename(path))
+        try:
+            if mode == "wb":
+                with open(path, "wb") as handle:
+                    handle.write(data)
+            else:
+                with open(path, "w", encoding="utf-8", newline="") as handle:
+                    handle.write(data)
+        except OSError as exc:
+            self.banner.show_message("error", "Couldn't save: %s"
+                                     % html.escape(exc.strerror or str(exc)))
+            return
+        self.banner.show_message("success", "Saved as <b>%s</b>."
+                                 % html.escape(os.path.basename(path)))
 
     def _copy(self):
-        if self._recovered_text:
-            QtWidgets.QApplication.clipboard().setText(self._recovered_text)
+        if self._text:
+            QtWidgets.QApplication.clipboard().setText(self._text)
             self.banner.show_message("success", "Copied to the clipboard.")
 
 
-class Ui_MainWindow(object):
-    """Lets the page run on its own in a QMainWindow."""
-
-    def setupUi(self, MainWindow):
-        self.MainWindow = MainWindow
-        MainWindow.setWindowTitle("Whisper — Read a hidden message")
-        MainWindow.resize(880, 760)
-        self.page = RevealPage()
-        MainWindow.setCentralWidget(self.page)
-
-    def retranslateUi(self, MainWindow):
-        pass
-
-
-if __name__ == "__main__":
+def main():
     app = QtWidgets.QApplication(sys.argv)
     theme.apply(app)
     window = QtWidgets.QMainWindow()
-    Ui_MainWindow().setupUi(window)
+    window.setWindowTitle("Whisper — Read a hidden message")
+    window.resize(880, 760)
+    window.setCentralWidget(RevealPage())
     window.show()
     sys.exit(app.exec_())
+
+
+if __name__ == "__main__":
+    main()

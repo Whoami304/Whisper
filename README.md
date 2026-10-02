@@ -1,81 +1,87 @@
 # Whisper
 
----
+Hide an encrypted text message or picture inside an ordinary picture or audio file.
+The result looks and sounds the same as the original; only someone with the password
+can read what is inside.
 
-## 🚀 Features
+![Home](docs/screenshots/main.png)
 
-- 🎙️ Hide Text and Image files (PNG)
-- Text -> Text
-- Text -> Image
-- Text -> Audio
-- Image -> Image
-- 🧠 Extract hidden content
-- from Text -> Text
-- from Image -> Text
-- from Audio -> Text
-- from Image -> Image
-- 🖥️ User-friendly interface
-- 📝 Save data and set password
+## Features
 
----
+- Hide **text** or a **picture** inside a **picture** (PNG, BMP, TIFF, JPG, WebP → saved as PNG), a **WAV** (8/16-bit PCM) or an **MP3**.
+- The type of secret is detected automatically when you read it back.
+- **AES-256-GCM** encryption, key derived from the password with **scrypt**; tampering is detected.
+- No markers in the file: without the password a Whisper file is indistinguishable from one with nothing hidden (pictures and WAV).
+- Password strength meter and a strong-password generator.
+- Desktop app (PyQt5) and a command-line tool.
+- Files made by the old Whisper v1 can still be opened (read-only).
 
-## 📁 Project Structure
+Details and limits: [SECURITY.md](SECURITY.md).
+
+## Quick start (Windows)
+
+1. Install Python 3.10+ from <https://www.python.org/downloads/> (tick *Add python.exe to PATH*).
+2. Double-click **`setup.bat`** — it creates `.venv` and installs everything from `requirements.txt`.
+3. Double-click **`run.bat`** to start the app.
+
+**PyCharm:** *Settings → Project → Python Interpreter → Add Interpreter → Existing* →
+`<project>\.venv\Scripts\python.exe`, then run `app.py`.
+
+### Any OS, manually
 
 ```bash
-gui/
-├── HideMessage
-  ├── hideMessage.py
-├── RevealMessage
-  ├── revealContent.py
-├── StartWindow
-  ├── mainWindow.py
+python -m venv .venv
+# Windows: .venv\Scripts\activate      macOS/Linux: source .venv/bin/activate
+pip install -r requirements.txt
+python app.py
+```
+
+## Command line
+
+The password is asked for interactively (or taken from `WHISPER_PASSWORD`).
+
+```bash
+python Whisper/main.py hide-text  photo.png  photo_secret.png  -m "meet at 7"
+python Whisper/main.py hide-text  song.wav   song_secret.wav   -f message.txt
+python Whisper/main.py hide-image photo.png  photo_secret.png  secret.jpg
+python Whisper/main.py reveal     photo_secret.png  [-o out.txt]
+python Whisper/main.py capacity   photo.png
+```
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+The suite covers round-trips for every carrier, wrong passwords, tampering,
+capacity limits, absence of plaintext markers, v1 compatibility, the CLI and a GUI smoke test.
+
+## Project structure
+
+```
+app.py                     start the desktop app
 Whisper/
-├── AESCipher.py
-├── AudioTextSteganography.py
-├── Cryptography.py
-├── ImageSteganography.py
-├── main.py
-├── protection.py
-├── Reverse_Crypt.py
-├── steganography.py
-├── StegoTextPass.py
+  engine.py                crypto + steganography (the only module the UI talks to)
+  legacy.py                read-only support for Whisper v1 files
+  main.py                  command-line interface
+gui/
+  theme.py                 colours, stylesheet, icons, shared widgets
+  StartWindow/mainWindow.py   main window and home screen
+  HideMessage/hideMessage.py  "Hide a message" page
+  RevealContent/revealContent.py  "Read a hidden message" page
+tests/                     pytest suite and v1 fixtures
+docs/screenshots/
+setup.bat, run.bat         Windows helpers
+```
 
+## Screenshots
 
----
-## 🖥️ How to run the application
+| Hide | Read |
+|---|---|
+| ![Hide](docs/screenshots/hide.png) | ![Reveal](docs/screenshots/reveal.png) |
 
-🖥 (Git Bash):
-/d/whisper project $ python -m gui.StartWindow.mainWindow
+## Credits
 
----
-
-## Main Window
-![Main](img/main.png)
-
-## Hide Content
-![Hide](img/hide.png)
-
-## Reveal Content
-![Reveal](img/reveal.png)
-
-
-
----
-📦 Installation
-Clone the repository:
-(https://github.com/Mari-Tchokhuri/Whisper.git)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+Original project by [Mari-Tchokhuri](https://github.com/Mari-Tchokhuri/Whisper).
