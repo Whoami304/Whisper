@@ -81,3 +81,5 @@ setup.bat, run.bat         Windows helpers
 | Hide | Read |
 |---|---|
 | ![Hide](docs/screenshots/hide.png) | ![Reveal](docs/screenshots/reveal.png) |
+
+
