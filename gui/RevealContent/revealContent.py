@@ -76,10 +76,11 @@ class RevealPage(theme.Page):
         self.actions.addWidget(self.banner, 1)
         self.extract_btn = QtWidgets.QPushButton("Unlock")
         self.extract_btn.setObjectName("primary")
-        self.extract_btn.setIcon(theme.icon("unlock", 16, "#ffffff"))
-        self.extract_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self.extract_btn.setToolTip("Unlock the secret with this password (Enter)")
+        theme.set_button_icon(self.extract_btn, "unlock", "#ffffff")
         self.extract_btn.clicked.connect(self._start_extract)
         self.actions.addWidget(self.extract_btn, 0, QtCore.Qt.AlignRight)
+        self.primary_btn = self.extract_btn
 
     # -- step 1 --------------------------------------------------------
 
@@ -118,7 +119,7 @@ class RevealPage(theme.Page):
 
         head = QtWidgets.QHBoxLayout()
         head.setSpacing(10)
-        head.addWidget(theme.icon_label("check", 22, theme.SUCCESS))
+        head.addWidget(theme.icon_label("check", 22, "SUCCESS"))
         self.result_title = theme.label("Hidden message", "stepTitle")
         head.addWidget(self.result_title)
         head.addStretch()
@@ -138,18 +139,20 @@ class RevealPage(theme.Page):
         self.result_image = QtWidgets.QLabel()
         self.result_image.setAlignment(QtCore.Qt.AlignCenter)
         self.result_image.setMinimumHeight(160)
-        self.result_image.setStyleSheet(
+        theme.themed(lambda: self.result_image.setStyleSheet(
             "background: %s; border: 1px solid %s; border-radius: 10px; padding: 8px;"
-            % (theme.SURFACE_ALT, theme.BORDER))
+            % (theme.SURFACE_ALT, theme.BORDER)), self.result_image)
         self.result_stack.addWidget(self.result_image)
         lay.addWidget(self.result_stack)
 
         buttons = QtWidgets.QHBoxLayout()
         buttons.setSpacing(8)
         self.copy_btn = QtWidgets.QPushButton("Copy text")
+        theme.set_button_icon(self.copy_btn, "copy")
         self.copy_btn.clicked.connect(self._copy)
         buttons.addWidget(self.copy_btn)
         self.save_btn = QtWidgets.QPushButton("Save to file…")
+        theme.set_button_icon(self.save_btn, "save")
         self.save_btn.clicked.connect(self._save)
         buttons.addWidget(self.save_btn)
         buttons.addStretch()

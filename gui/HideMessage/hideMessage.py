@@ -74,13 +74,16 @@ class HidePage(theme.Page):
         self.actions.addWidget(self.banner, 1)
         self.embed_btn = QtWidgets.QPushButton("Hide and save…")
         self.embed_btn.setObjectName("primary")
-        self.embed_btn.setIcon(theme.icon("lock", 16, "#ffffff"))
-        self.embed_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self.embed_btn.setToolTip("Choose where to save the copy with your secret (Ctrl+Enter)")
+        theme.set_button_icon(self.embed_btn, "lock", "#ffffff")
         self.embed_btn.clicked.connect(self._start_embed)
         self.actions.addWidget(self.embed_btn, 0, QtCore.Qt.AlignRight)
+        self.primary_btn = self.embed_btn
 
         self._ready = True
         self._sync_mode()
+        # The space note can carry a palette colour; redo it when the theme flips.
+        theme.themed(self._refresh_budget, self)
 
     # -- step 1 --------------------------------------------------------
 
