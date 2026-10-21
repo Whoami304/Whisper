@@ -5,7 +5,7 @@ name: Build Windows exe
 on:
   push:
     branches: [main]
-    paths: [VERSION]
+    paths: [VERSION, .github/workflows/build-exe.yml]
   workflow_dispatch:
 
 permissions:
@@ -32,9 +32,17 @@ jobs:
           pip install -r requirements-dev.txt pyinstaller
 
       - name: Run tests
+        shell: pwsh
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest -q
+        run: |
+          python -m pytest -q --tb=short -rfE 2>&1 | Tee-Object -FilePath pytest.txt
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            $tail = (Get-Content pytest.txt | Select-Object -Last 80) -join "%0A"
+            Write-Output "::error title=pytest failed::$tail"
+            exit $code
+          }
 
       - name: Build Whisper.exe
         run: python build_exe.py
@@ -46,7 +54,10 @@ jobs:
           Copy-Item dist\Whisper.exe clean\
           $env:PATH = "C:\Windows\System32;C:\Windows"
           $p = Start-Process -FilePath clean\Whisper.exe -ArgumentList "--selftest", "$PWD\selftest.txt" -Wait -PassThru
-          Get-Content selftest.txt
+          $report = if (Test-Path selftest.txt) { Get-Content selftest.txt } else { @("no report written") }
+          $report
+          $level = if ($p.ExitCode -eq 0) { "notice" } else { "error" }
+          Write-Output ("::{0} title=Whisper.exe self-test (exit {1})::{2}" -f $level, $p.ExitCode, ($report -join "%0A"))
           if ($p.ExitCode -ne 0) { throw "self-test failed with exit code $($p.ExitCode)" }
           "{0:N1} MB" -f ((Get-Item dist\Whisper.exe).Length / 1MB)
 
