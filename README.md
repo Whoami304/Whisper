@@ -61,7 +61,7 @@ python build_exe.py            # -> dist/Whisper.exe
 dist\Whisper.exe --selftest    # quick end-to-end check, writes whisper-selftest.txt
 ```
 
-Pushing a tag like `v2.1.0` builds and tests the exe on GitHub Actions and attaches it to a release.
+Bumping the number in `VERSION` on `main` makes GitHub Actions build and test the exe on Windows and publish it as release `v<VERSION>`.
 
 ## Tests
 
