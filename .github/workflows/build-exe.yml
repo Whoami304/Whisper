@@ -1,0 +1,58 @@
+name: Build Windows exe
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt pyinstaller
+
+      - name: Run tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q
+
+      - name: Build Whisper.exe
+        run: python build_exe.py
+
+      - name: Self-test the exe (no Python on PATH)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force clean | Out-Null
+          Copy-Item dist\Whisper.exe clean\
+          $env:PATH = "C:\Windows\System32;C:\Windows"
+          $p = Start-Process -FilePath clean\Whisper.exe -ArgumentList "--selftest", "$PWD\selftest.txt" -Wait -PassThru
+          Get-Content selftest.txt
+          if ($p.ExitCode -ne 0) { throw "self-test failed with exit code $($p.ExitCode)" }
+          "{0:N1} MB" -f ((Get-Item dist\Whisper.exe).Length / 1MB)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Whisper-windows
+          path: dist/Whisper.exe
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Whisper.exe
+          body: |
+            **Whisper for Windows** — download `Whisper.exe` and run it. No Python or other installs needed.
+
+            Windows SmartScreen may warn about an unknown publisher the first time: click *More info* → *Run anyway*.

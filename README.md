@@ -18,7 +18,12 @@ can read what is inside.
 
 Details and limits: [SECURITY.md](SECURITY.md).
 
-## Quick start (Windows)
+## Download (Windows)
+
+Get **`Whisper.exe`** from the [latest release](https://github.com/Whoami304/Whisper/releases/latest) and run it — no Python or other installs needed.
+On first launch Windows SmartScreen may say the publisher is unknown: click *More info* → *Run anyway*.
+
+## Run from source (Windows)
 
 1. Install Python 3.10+ from <https://www.python.org/downloads/> (tick *Add python.exe to PATH*).
 2. Double-click **`setup.bat`** — it creates `.venv` and installs everything from `requirements.txt`.
@@ -48,6 +53,16 @@ python Whisper/main.py reveal     photo_secret.png  [-o out.txt]
 python Whisper/main.py capacity   photo.png
 ```
 
+## Build the exe yourself
+
+```bash
+pip install -r requirements.txt pyinstaller
+python build_exe.py            # -> dist/Whisper.exe
+dist\Whisper.exe --selftest    # quick end-to-end check, writes whisper-selftest.txt
+```
+
+Pushing a tag like `v2.1.0` builds and tests the exe on GitHub Actions and attaches it to a release.
+
 ## Tests
 
 ```bash
@@ -74,6 +89,7 @@ gui/
 tests/                     pytest suite and v1 fixtures
 docs/screenshots/
 setup.bat, run.bat         Windows helpers
+build_exe.py               build a standalone Whisper.exe (PyInstaller)
 ```
 
 ## Screenshots

@@ -50,6 +50,10 @@ def _alert(text):
 
 
 def ensure():
+    # A packaged build (Whisper.exe) carries its own libraries and has no
+    # pip to call -- sys.executable is the exe itself -- so never "repair".
+    if getattr(sys, "frozen", False):
+        return
     problem = _problem()
     if problem is None:
         return
